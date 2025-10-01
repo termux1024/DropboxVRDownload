@@ -12,8 +12,8 @@ def read_access_token(token_file="dropbox_token.txt"):
         return f.read().strip()
 
 ACCESS_TOKEN = read_access_token()
-LINKS_FILE = "checkfordevelop.txt"
-DROPBOX_FOLDER = "/VR2"
+LINKS_FILE = "missing_links.txt"  # File containing URLs, one per line
+DROPBOX_FOLDER = "/VR"
 TEMP_DIR = "temp_downloads"
 os.makedirs(TEMP_DIR, exist_ok=True)
 # ======================
