@@ -11,7 +11,6 @@ def read_access_token(token_file="dropbox_token.txt"):
         return f.read().strip()
 
 ACCESS_TOKEN = read_access_token()
-LINKS_FILE = "missing_links.txt"  # File containing URLs, one per line
 DROPBOX_FOLDER = "/VR"
 TEMP_DIR = "temp_downloads"
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -94,15 +93,8 @@ def upload_file(local_path, file_name):
     except Exception as e:
         print(f"Upload failed for {file_name}: {e}")
 
-with open(LINKS_FILE, "r", encoding="utf-8") as f:
-    urls = [line.strip() for line in f if line.strip()]
-
 if __name__ == "__main__":
-    for url in urls:
-        local_path, file_name = download_file(url)
-        if local_path:
-            upload_file(local_path, file_name)
-
-    # Run CombinedDropboxRunner.py after all uploads are done
-    import runpy
-    runpy.run_path("CombinedDropboxRunner.py")
+    url = input("Enter the link to download and upload: ").strip()
+    local_path, file_name = download_file(url)
+    if local_path:
+        upload_file(local_path, file_name)
