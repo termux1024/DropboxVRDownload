@@ -4,6 +4,7 @@ import os
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+import shutil
 
 # ====== SETTINGS ======
 def read_access_token(token_file="dropbox_token.txt"):
@@ -12,7 +13,7 @@ def read_access_token(token_file="dropbox_token.txt"):
 
 ACCESS_TOKEN = read_access_token()
 LINKS_FILE = "checkfordevelop.txt"
-DROPBOX_FOLDER = "/VR"
+DROPBOX_FOLDER = "/VR2"
 TEMP_DIR = "temp_downloads"
 os.makedirs(TEMP_DIR, exist_ok=True)
 # ======================
@@ -26,6 +27,10 @@ def get_file_name(url):
         return qs['fn'][0]
     return os.path.basename(parsed_url.path)
 
+def has_enough_space(required_bytes, path=TEMP_DIR):
+    total, used, free = shutil.disk_usage(path)
+    return free > required_bytes
+
 def download_file(url):
     file_name = get_file_name(url)
     local_path = os.path.join(TEMP_DIR, file_name)
@@ -33,6 +38,9 @@ def download_file(url):
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
             total_size = int(r.headers.get('content-length', 0))
+            if not has_enough_space(total_size):
+                print(f"Skipping {file_name}: Not enough disk space ({total_size} bytes needed).")
+                return None, file_name
             with open(local_path, 'wb') as f, tqdm(
                 desc=f"Downloading {file_name}",
                 total=total_size,
@@ -90,12 +98,17 @@ def upload_file(local_path, file_name):
 with open(LINKS_FILE, "r", encoding="utf-8") as f:
     urls = [line.strip() for line in f if line.strip()]
 
-with ThreadPoolExecutor(max_workers=4) as download_executor, ThreadPoolExecutor(max_workers=2) as upload_executor:
-    future_to_url = {download_executor.submit(download_file, url): url for url in urls}
-    upload_futures = []
-    for future in as_completed(future_to_url):
-        local_path, file_name = future.result()
-        if local_path:
-            upload_futures.append(upload_executor.submit(upload_file, local_path, file_name))
-    for uf in as_completed(upload_futures):
-        uf.result()
+if __name__ == "__main__":
+    with ThreadPoolExecutor(max_workers=2) as download_executor, ThreadPoolExecutor(max_workers=2) as upload_executor:
+        future_to_url = {download_executor.submit(download_file, url): url for url in urls}
+        upload_futures = []
+        for future in as_completed(future_to_url):
+            local_path, file_name = future.result()
+            if local_path:
+                upload_futures.append(upload_executor.submit(upload_file, local_path, file_name))
+        for uf in as_completed(upload_futures):
+            uf.result()
+
+    # Run CombinedDropboxRunner.py after all uploads are done
+    import runpy
+    runpy.run_path("CombinedDropboxRunner.py")
