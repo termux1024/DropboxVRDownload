@@ -3,6 +3,7 @@ import requests
 import os
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
 # ====== SETTINGS ======
 def read_access_token(token_file="dropbox_token.txt"):
@@ -31,10 +32,18 @@ def download_file(url):
     try:
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
-            with open(local_path, 'wb') as f:
+            total_size = int(r.headers.get('content-length', 0))
+            with open(local_path, 'wb') as f, tqdm(
+                desc=f"Downloading {file_name}",
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024
+            ) as bar:
                 for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        print(f"Downloaded: {file_name}")
+                    if chunk:
+                        f.write(chunk)
+                        bar.update(len(chunk))
         return local_path, file_name
     except Exception as e:
         print(f"Download failed for {file_name}: {e}")
@@ -43,9 +52,37 @@ def download_file(url):
 def upload_file(local_path, file_name):
     dropbox_path = f"{DROPBOX_FOLDER}/{file_name}"
     try:
-        with open(local_path, "rb") as f:
-            dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-        print(f"Uploaded: {file_name}")
+        file_size = os.path.getsize(local_path)
+        CHUNK_SIZE = 4 * 1024 * 1024  # 4MB
+        with open(local_path, "rb") as f, tqdm(
+            desc=f"Uploading {file_name}",
+            total=file_size,
+            unit='B',
+            unit_scale=True,
+            unit_divisor=1024
+        ) as bar:
+            if file_size <= 150 * 1024 * 1024:
+                data = f.read()
+                dbx.files_upload(data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+                bar.update(file_size)
+            else:
+                upload_session_start_result = dbx.files_upload_session_start(f.read(CHUNK_SIZE))
+                bar.update(CHUNK_SIZE)
+                cursor = dropbox.files.UploadSessionCursor(
+                    session_id=upload_session_start_result.session_id,
+                    offset=f.tell()
+                )
+                commit = dropbox.files.CommitInfo(path=dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+                while f.tell() < file_size:
+                    if (file_size - f.tell()) <= CHUNK_SIZE:
+                        chunk = f.read(CHUNK_SIZE)
+                        dbx.files_upload_session_finish(chunk, cursor, commit)
+                        bar.update(len(chunk))
+                    else:
+                        chunk = f.read(CHUNK_SIZE)
+                        dbx.files_upload_session_append_v2(chunk, cursor)
+                        cursor.offset = f.tell()
+                        bar.update(len(chunk))
         os.remove(local_path)
     except Exception as e:
         print(f"Upload failed for {file_name}: {e}")
@@ -53,15 +90,12 @@ def upload_file(local_path, file_name):
 with open(LINKS_FILE, "r", encoding="utf-8") as f:
     urls = [line.strip() for line in f if line.strip()]
 
-# Download up to 4 files at a time
 with ThreadPoolExecutor(max_workers=4) as download_executor, ThreadPoolExecutor(max_workers=2) as upload_executor:
     future_to_url = {download_executor.submit(download_file, url): url for url in urls}
     upload_futures = []
     for future in as_completed(future_to_url):
         local_path, file_name = future.result()
         if local_path:
-            # Start upload (up to 2 at a time)
             upload_futures.append(upload_executor.submit(upload_file, local_path, file_name))
-    # Wait for all uploads to finish
     for uf in as_completed(upload_futures):
         uf.result()
