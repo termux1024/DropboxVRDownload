@@ -2,8 +2,8 @@ import dropbox
 import requests
 import os
 from urllib.parse import urlparse, parse_qs
-from tqdm import tqdm
 import shutil
+import time
 
 # ====== SETTINGS ======
 def read_access_token(token_file="dropbox_token.txt"):
@@ -39,17 +39,18 @@ def download_file(url):
             if not has_enough_space(total_size):
                 print(f"Skipping {file_name}: Not enough disk space ({total_size} bytes needed).")
                 return None, file_name
-            with open(local_path, 'wb') as f, tqdm(
-                desc=f"Downloading {file_name}",
-                total=total_size,
-                unit='B',
-                unit_scale=True,
-                unit_divisor=1024
-            ) as bar:
+            downloaded = 0
+            last_report = time.time()
+            with open(local_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-                        bar.update(len(chunk))
+                        downloaded += len(chunk)
+                        now = time.time()
+                        if now - last_report >= 3 or downloaded == total_size:
+                            percent = (downloaded / total_size) * 100 if total_size else 0
+                            print(f"Downloading {file_name}: {percent:.2f}%")
+                            last_report = now
         return local_path, file_name
     except Exception as e:
         print(f"Download failed for {file_name}: {e}")
@@ -60,20 +61,17 @@ def upload_file(local_path, file_name):
     try:
         file_size = os.path.getsize(local_path)
         CHUNK_SIZE = 4 * 1024 * 1024  # 4MB
-        with open(local_path, "rb") as f, tqdm(
-            desc=f"Uploading {file_name}",
-            total=file_size,
-            unit='B',
-            unit_scale=True,
-            unit_divisor=1024
-        ) as bar:
+        uploaded = 0
+        last_report = time.time()
+        with open(local_path, "rb") as f:
             if file_size <= 150 * 1024 * 1024:
                 data = f.read()
                 dbx.files_upload(data, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-                bar.update(file_size)
+                uploaded = file_size
+                print(f"Uploading {file_name}: 100.00%")
             else:
                 upload_session_start_result = dbx.files_upload_session_start(f.read(CHUNK_SIZE))
-                bar.update(CHUNK_SIZE)
+                uploaded += CHUNK_SIZE
                 cursor = dropbox.files.UploadSessionCursor(
                     session_id=upload_session_start_result.session_id,
                     offset=f.tell()
@@ -83,12 +81,18 @@ def upload_file(local_path, file_name):
                     if (file_size - f.tell()) <= CHUNK_SIZE:
                         chunk = f.read(CHUNK_SIZE)
                         dbx.files_upload_session_finish(chunk, cursor, commit)
-                        bar.update(len(chunk))
+                        uploaded = file_size
+                        print(f"Uploading {file_name}: 100.00%")
                     else:
                         chunk = f.read(CHUNK_SIZE)
                         dbx.files_upload_session_append_v2(chunk, cursor)
                         cursor.offset = f.tell()
-                        bar.update(len(chunk))
+                        uploaded += len(chunk)
+                        now = time.time()
+                        if now - last_report >= 3:
+                            percent = (uploaded / file_size) * 100 if file_size else 0
+                            print(f"Uploading {file_name}: {percent:.2f}%")
+                            last_report = now
         os.remove(local_path)
     except Exception as e:
         print(f"Upload failed for {file_name}: {e}")
